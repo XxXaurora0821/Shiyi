@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>拾忆 · Shiyi</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; background: #f6f7f9; color: #222; }
+  .wrap { display: flex; height: 100vh; }
+  .chat { flex: 2; display: flex; flex-direction: column; padding: 16px; min-width: 0; }
+  .side { flex: 1; max-width: 380px; padding: 16px; background: #fff; border-left: 1px solid #e6e6e6; overflow-y: auto; }
+  .messages { flex: 1; overflow-y: auto; padding: 8px 4px; }
+  .msg { margin: 8px 0; padding: 10px 12px; border-radius: 12px; max-width: 75%; white-space: pre-wrap; line-height: 1.5; word-break: break-word; }
+  .user { background: #5b8def; color: #fff; margin-left: auto; }
+  .assistant { background: #fff; border: 1px solid #e6e6e6; }
+  .row { display: flex; gap: 8px; padding-top: 8px; }
+  textarea { flex: 1; padding: 10px; border-radius: 10px; border: 1px solid #ccc; resize: none; font-family: inherit; font-size: 14px; height: 70px; }
+  button { padding: 8px 18px; border-radius: 10px; border: none; background: #5b8def; color: #fff; cursor: pointer; font-size: 14px; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  h3 { margin: 4px 0 8px; font-size: 12px; color: #555; text-transform: uppercase; letter-spacing: 0.08em; }
+  .feat { padding: 8px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+  .cat { display: inline-block; padding: 1px 8px; background: #eef3ff; color: #3a5dbf; border-radius: 6px; font-size: 11px; margin-right: 6px; }
+  .meta { color: #888; font-size: 11px; margin-top: 2px; }
+  .field { margin: 2px 0; font-size: 13px; }
+  .debug { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: #fafafa; border: 1px solid #eee; padding: 8px; border-radius: 8px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
+  .top { display: flex; gap: 8px; align-items: center; padding-bottom: 8px; flex-wrap: wrap; }
+  input[type=text] { padding: 6px 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 13px; }
+  .empty { color: #888; font-size: 13px; padding: 8px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="chat">
+    <div class="top">
+      <label>用户 ID</label>
+      <input id="uid" type="text" value="demo_user" />
+      <button onclick="newSession()">新会话</button>
+      <button onclick="refresh()">刷新记忆</button>
+      <span class="meta" id="sid"></span>
+    </div>
+    <div class="messages" id="messages"></div>
+    <div class="row">
+      <textarea id="input" placeholder="试试：「你好我叫小明，今年25岁，是男生，喜欢打篮球，经常熬夜还爱点外卖。」 (Cmd/Ctrl+Enter 发送)"></textarea>
+      <button id="send" onclick="send()">发送</button>
+    </div>
+  </div>
+  <div class="side">
+    <h3>核心档案 L0</h3>
+    <div id="profile"></div>
+    <h3 style="margin-top:14px">动态特征 L1</h3>
+    <div id="features"></div>
+    <h3 style="margin-top:14px">最近一次检索 (Debug)</h3>
+    <div id="debug" class="debug">尚无</div>
+  </div>
+</div>
+<script>
+let sessionId = null;
+function uid() { return document.getElementById('uid').value.trim() || 'demo_user'; }
+function newSession() {
+  sessionId = null;
+  document.getElementById('messages').innerHTML = '';
+  document.getElementById('sid').textContent = '';
+  refresh();
+}
+function escapeHtml(s) { return (s || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
+function appendMsg(role, content) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.textContent = content;
+  document.getElementById('messages').appendChild(div);
+  div.scrollIntoView({ behavior: 'smooth' });
+}
+async function send() {
+  const inp = document.getElementById('input');
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = '';
+  document.getElementById('send').disabled = true;
+  appendMsg('user', text);
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: uid(), session_id: sessionId, message: text }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const data = await resp.json();
+    sessionId = data.session_id;
+    document.getElementById('sid').textContent = 'session: ' + sessionId.slice(0, 8);
+    appendMsg('assistant', data.reply);
+    document.getElementById('debug').textContent = JSON.stringify(data.debug, null, 2);
+    refresh();
+  } catch (e) {
+    appendMsg('assistant', '出错：' + e.message);
+  }
+  document.getElementById('send').disabled = false;
+}
+async function refresh() {
+  try {
+    const resp = await fetch('/api/memory/' + encodeURIComponent(uid()));
+    const data = await resp.json();
+    const p = data.profile || {};
+    document.getElementById('profile').innerHTML =
+      `<div class="field">姓名：${escapeHtml(p.name || '—')}</div>
+       <div class="field">年龄：${p.age ?? '—'}</div>
+       <div class="field">性别：${escapeHtml(p.gender || '—')}</div>`;
+    const fs = document.getElementById('features');
+    fs.innerHTML = '';
+    if (!data.features || data.features.length === 0) {
+      fs.innerHTML = '<div class="empty">还没有抽取到任何特征</div>';
+      return;
+    }
+    data.features.forEach(f => {
+      const div = document.createElement('div');
+      div.className = 'feat';
+      div.innerHTML =
+        `<span class="cat">${escapeHtml(f.category)}</span><b>${escapeHtml(f.key)}</b>
+         <div class="meta">${escapeHtml(f.value || '')}</div>
+         <div class="meta">置信度 ${(+f.confidence).toFixed(2)} · 命中 ${f.hit_count}</div>`;
+      fs.appendChild(div);
+    });
+  } catch (e) {
+    console.error(e);
+  }
+}
+document.getElementById('input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
+});
+refresh();
+</script>
+</body>
+</html>
